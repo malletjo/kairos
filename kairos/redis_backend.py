@@ -135,12 +135,12 @@ class RedisBackend(Timeseries):
       timestamps = self._normalize_timestamps(timestamp, intervals, config)
       for tstamp in timestamps:
         self._insert_data(name, value, tstamp, interval, config, pipe,
-          ttl_batch=kwargs.get('ttl_batch'))
+          ttl_batch=kwargs.get('ttl_batch'), incr=kwargs.get('incr'))
 
     if 'pipeline' not in kwargs:
       pipe.execute()
 
-  def _insert_data(self, name, value, timestamp, interval, config, pipe, ttl_batch=None):
+  def _insert_data(self, name, value, timestamp, interval, config, pipe, ttl_batch=None, incr=None):
     '''Helper to insert data into redis'''
     # Calculate the TTL and abort if inserting into the past
     expire, ttl = config['expire'], config['ttl'](timestamp)
@@ -150,14 +150,20 @@ class RedisBackend(Timeseries):
     i_bucket, r_bucket, i_key, r_key = self._calc_keys(config, name, timestamp)
 
     if config['coarse']:
-      self._type_insert(pipe, i_key, value)
+      if incr:
+	self._type_insert(pipe, i_key, value, incr)
+      else:
+	self._type_insert(pipe, i_key, value)
     else:
       # Add the resolution bucket to the interval. This allows us to easily
       # discover the resolution intervals within the larger interval, and
       # if there is a cap on the number of steps, it will go out of scope
       # along with the rest of the data
       pipe.sadd(i_key, r_bucket)
-      self._type_insert(pipe, r_key, value)
+      if incr:
+        self._type_insert(pipe, r_key, value, incr)
+      else:
+        self._type_insert(pipe, r_key, value)
 
     if expire:
       ttl_args = (i_key, ttl)
@@ -279,11 +285,11 @@ class RedisSeries(RedisBackend, Series):
 
 class RedisHistogram(RedisBackend, Histogram):
 
-  def _type_insert(self, handle, key, value):
+  def _type_insert(self, handle, key, value, incr=1):
     '''
     Insert the value into the series.
     '''
-    handle.hincrby(key, value, 1)
+    handle.hincrby(key, value, incr)
 
   def _type_get(self, handle, key):
     return handle.hgetall(key)
